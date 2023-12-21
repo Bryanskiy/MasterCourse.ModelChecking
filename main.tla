@@ -23,11 +23,14 @@ variables
 
 define
 \*SAFETY
-    PayAfterBonus == (mloyal => pay)
-    RemoveAfterAccess == (block => (recalc /\ recalc2))
-    StableWeight == (weight /\ stable => recalc)
-    BonusCard == (card => (mloyal /\ recalc))
+    PayAfterBonus == (mloyal ~> pay)
+    RecalcAfterSuccsScale == (weight /\ stable ~> recalc)
+    RemoveAfterAccess == (block ~> main)
+    StableWeight == (weight /\ stable ~> recalc)
+    BonusCard == (card ~> ~mloyal)
 \*LIVENESS
+    WillPay == (menu ~> <>pay)
+    WillRecalc == (menu \/ stable \/ bag ~> recalc)
 end define
 
 fair process Register = "Register" begin
@@ -37,9 +40,10 @@ registerLoop:
         if main = FALSE /\ bag = TRUE then
             s8:
                 cheque := cheque + bagPrice;
-                bag := FALSE || main := TRUE;
+                bag := FALSE || main := TRUE || recalc := FALSE;
         elsif main = FALSE /\ mloyal = TRUE then
             s10:
+                pay := TRUE;
                 if card = TRUE then
                     if cheque < cardBonuses then
                         cardBonuses := cardBonuses - cheque;
@@ -49,12 +53,22 @@ registerLoop:
                         cardBonuses := 0;
                     end if;
                 end if;
-                pay := TRUE;
+                mloyal := FALSE;
         elsif main = FALSE /\ pay = TRUE then
-             block := TRUE;
+            if cheque > rubles then
+                s5: block := TRUE;
+            else
+                rubles := rubles - cheque;
+                main := TRUE || recalc := FALSE;
+            end if;
+        elsif main = FALSE /\ weight = TRUE /\ stable = TRUE then
+            rubles := rubles - productCost;
+            main := TRUE || recalc := FALSE;
+            weight := FALSE || stable := FALSE;
+        else
+            rubles := rubles - productCost;
+            main := TRUE || recalc := FALSE;
         end if;
-        
-        s6: recalc := FALSE;
     end while;
 end process
 
@@ -94,6 +108,13 @@ s1:
     end while;
 end process
 
+fair process Administrator = "Administrator" begin
+    s5: while(TRUE) do
+        await block = TRUE;
+        main := TRUE || block := FALSE;
+    end while;
+end process;
+
 end algorithm;*)
 \* BEGIN TRANSLATION
 VARIABLES main, pay, block, mloyal, weight, bag, recalc, recalc2, card, 
@@ -101,7 +122,7 @@ VARIABLES main, pay, block, mloyal, weight, bag, recalc, recalc2, card,
 
 (* define statement *)
 PayAfterBonus == (mloyal => pay)
-RemoveAfterAccess == (block => (recalc /\ recalc2))
+RemoveAfterAccess == (block => recalc)
 StableWeight == (weight /\ stable => recalc)
 BonusCard == (card => (mloyal /\ recalc))
 
@@ -135,33 +156,35 @@ registerLoop == /\ pc["Register"] = "registerLoop"
                 /\ recalc = TRUE
                 /\ IF main = FALSE /\ bag = TRUE
                       THEN /\ pc' = [pc EXCEPT !["Register"] = "s8"]
-                           /\ block' = block
+                           /\ UNCHANGED << main, recalc, rubles >>
                       ELSE /\ IF main = FALSE /\ mloyal = TRUE
                                  THEN /\ pc' = [pc EXCEPT !["Register"] = "s10"]
-                                      /\ block' = block
+                                      /\ UNCHANGED << main, recalc, rubles >>
                                  ELSE /\ IF main = FALSE /\ pay = TRUE
-                                            THEN /\ block' = TRUE
-                                            ELSE /\ TRUE
-                                                 /\ block' = block
-                                      /\ pc' = [pc EXCEPT !["Register"] = "s6"]
-                /\ UNCHANGED << main, pay, mloyal, weight, bag, recalc, 
-                                recalc2, card, stable, rubles, productCost, 
-                                cardBonuses, bagPrice, cheque >>
-
-s6 == /\ pc["Register"] = "s6"
-      /\ recalc' = FALSE
-      /\ pc' = [pc EXCEPT !["Register"] = "registerLoop"]
-      /\ UNCHANGED << main, pay, block, mloyal, weight, bag, recalc2, card, 
-                      stable, rubles, productCost, cardBonuses, bagPrice, 
-                      cheque >>
+                                            THEN /\ IF cheque > rubles
+                                                       THEN /\ pc' = [pc EXCEPT !["Register"] = "s5"]
+                                                            /\ UNCHANGED << main, 
+                                                                            recalc, 
+                                                                            rubles >>
+                                                       ELSE /\ rubles' = rubles - cheque
+                                                            /\ /\ main' = TRUE
+                                                               /\ recalc' = FALSE
+                                                            /\ pc' = [pc EXCEPT !["Register"] = "registerLoop"]
+                                            ELSE /\ pc' = [pc EXCEPT !["Register"] = "registerLoop"]
+                                                 /\ UNCHANGED << main, recalc, 
+                                                                 rubles >>
+                /\ UNCHANGED << pay, block, mloyal, weight, bag, recalc2, card, 
+                                stable, productCost, cardBonuses, bagPrice, 
+                                cheque >>
 
 s8 == /\ pc["Register"] = "s8"
       /\ cheque' = cheque + bagPrice
       /\ /\ bag' = FALSE
          /\ main' = TRUE
-      /\ pc' = [pc EXCEPT !["Register"] = "s6"]
-      /\ UNCHANGED << pay, block, mloyal, weight, recalc, recalc2, card, 
-                      stable, rubles, productCost, cardBonuses, bagPrice >>
+         /\ recalc' = FALSE
+      /\ pc' = [pc EXCEPT !["Register"] = "registerLoop"]
+      /\ UNCHANGED << pay, block, mloyal, weight, recalc2, card, stable, 
+                      rubles, productCost, cardBonuses, bagPrice >>
 
 s10 == /\ pc["Register"] = "s10"
        /\ IF card = TRUE
@@ -172,12 +195,20 @@ s10 == /\ pc["Register"] = "s10"
                              /\ cardBonuses' = 0
              ELSE /\ TRUE
                   /\ UNCHANGED << cardBonuses, cheque >>
-       /\ pay' = TRUE
-       /\ pc' = [pc EXCEPT !["Register"] = "s6"]
-       /\ UNCHANGED << main, block, mloyal, weight, bag, recalc, recalc2, card, 
-                       stable, rubles, productCost, bagPrice >>
+       /\ /\ mloyal' = FALSE
+          /\ pay' = TRUE
+       /\ pc' = [pc EXCEPT !["Register"] = "registerLoop"]
+       /\ UNCHANGED << main, block, weight, bag, recalc, recalc2, card, stable, 
+                       rubles, productCost, bagPrice >>
 
-Register == registerLoop \/ s6 \/ s8 \/ s10
+s5 == /\ pc["Register"] = "s5"
+      /\ block' = TRUE
+      /\ pc' = [pc EXCEPT !["Register"] = "registerLoop"]
+      /\ UNCHANGED << main, pay, mloyal, weight, bag, recalc, recalc2, card, 
+                      stable, rubles, productCost, cardBonuses, bagPrice, 
+                      cheque >>
+
+Register == registerLoop \/ s8 \/ s10 \/ s5
 
 s2 == /\ pc["Scales"] = "s2"
       /\ main = FALSE /\ weight = TRUE
